@@ -160,16 +160,17 @@
   z-index: 42069;
 
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none;
+  visibility: hidden;
+  transition: visibility 0ms linear 250ms;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition-delay: 0ms;
+  }
 
   color: var(--theme-background);
   font-size: clamp(2rem, 5vw, 3rem);
   font-variation-settings: 'CASL' 1, 'slnt' -15, 'wght' 1000;
-
-  &[hidden] {
-    opacity: 0;
-    pointer-events: none;
-  }
 
   &Inner {
     display: flex;
@@ -195,4 +196,10 @@
   &Email {
     align-self: center;
   }
+}
+
+.backdropOpen {
+  pointer-events: auto;
+  visibility: visible;
+  transition-delay: 0ms;
 }

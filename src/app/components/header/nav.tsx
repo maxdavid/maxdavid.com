@@ -223,20 +223,22 @@ export const Nav = () => {
       role={isOpen ? 'dialog' : undefined}
     >
       <div
-        className={classNames(styles.backdrop, recursive.className)}
-        hidden={!isOpen}
-        onClick={() => closeMenu()}
+        aria-hidden={!isOpen}
+        className={classNames(
+          styles.backdrop,
+          recursive.className,
+          isOpen && styles.backdropOpen
+        )}
+        onClick={(event) => closeMenu(event.detail === 0)}
+        {...(!isOpen ? { inert: '' } : {})}
       >
         <div className={styles.backdropInner}>
-          <div className={styles.backdropName} onClick={() => closeMenu()}>
-            Max David
-          </div>
+          <div className={styles.backdropName}>Max David</div>
           <div className={styles.backdropEmail}>
             <Link href='mailto:me@maxdavid.com'>me@maxdavid.com</Link>
           </div>
           <MobileMenuClose
             aria-label='Close navigation'
-            onClick={() => closeMenu()}
             disabled={!isOpen}
             ref={closeButtonRef}
           />
