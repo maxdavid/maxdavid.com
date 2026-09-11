@@ -1,21 +1,58 @@
 'use client';
 
 import classNames from 'classnames';
-import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from '@/app/components';
 import { recursive } from '@/app/fonts';
 import styles from './header.module.scss';
 
-const MobileMenuOpen = forwardRef<
+const MOBILE_QUERY = '(max-width: 900px)';
+
+const navigationLinks = [
+  {
+    href: 'https://linkedin.com/in/maxdavid',
+    key: 'linkedin',
+    label: 'linkedin',
+    target: 'linkedin',
+  },
+  {
+    href: '/MaxDavid_resume.pdf',
+    key: 'resume',
+    label: 'resume',
+  },
+] as const;
+
+const useBrowserLayoutEffect =
+  typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+const MobileMenuButton = forwardRef<
   HTMLButtonElement,
-  React.ButtonHTMLAttributes<HTMLButtonElement>
->(function MobileMenuOpen(props, ref) {
+  React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: 'open' | 'close' }
+>(function MobileMenuButton({ icon, onKeyDown, ...props }, ref) {
+  const isOpenIcon = icon === 'open';
+
   return (
     <button
       className={classNames(
         styles.mobileMenuButton,
-        styles.mobileMenuButtonOpen
+        !isOpenIcon && styles.mobileMenuButtonClose
       )}
+      onKeyDown={(event) => {
+        if (event.repeat && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          return;
+        }
+
+        onKeyDown?.(event);
+      }}
       {...props}
       ref={ref}
     >
@@ -24,253 +61,404 @@ const MobileMenuOpen = forwardRef<
         focusable='false'
         width='32'
         height='32'
-        viewBox='0 0 16 12'
+        viewBox={isOpenIcon ? '0 0 16 12' : '0 0 16 16'}
         fill='none'
         xmlns='http://www.w3.org/2000/svg'
       >
-        <path
-          d='M1 2H15'
-          stroke='currentColor'
-          strokeWidth='1'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-        />
-        <path
-          d='M1 6H15'
-          stroke='currentColor'
-          strokeWidth='1'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-        />
-        <path
-          d='M1 10H15'
-          stroke='currentColor'
-          strokeWidth='1'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-        />
+        {isOpenIcon ? (
+          <>
+            <path d='M1 2H15' />
+            <path d='M1 6H15' />
+            <path d='M1 10H15' />
+          </>
+        ) : (
+          <>
+            <path d='M1 1L15 15' />
+            <path d='M1 15L15 1' />
+          </>
+        )}
       </svg>
     </button>
   );
 });
 
-const MobileMenuClose = forwardRef<
-  HTMLButtonElement,
-  React.ButtonHTMLAttributes<HTMLButtonElement>
->(function MobileMenuClose(props, ref) {
-  return (
-    <button
-      className={classNames(
-        styles.mobileMenuButton,
-        styles.mobileMenuButtonClose
-      )}
-      {...props}
-      ref={ref}
-    >
-      <svg
-        aria-hidden='true'
-        focusable='false'
-        width='32'
-        height='32'
-        viewBox='0 0 16 16'
-        fill='none'
-        xmlns='http://www.w3.org/2000/svg'
-      >
-        <path
-          d='M1 1L15 15'
-          stroke='currentColor'
-          strokeWidth='1'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-        />
-        <path
-          d='M1 15L15 1'
-          stroke='currentColor'
-          strokeWidth='1'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-        />
-      </svg>
-    </button>
-  );
-});
+type BodyStyles = Pick<
+  CSSStyleDeclaration,
+  'left' | 'overflow' | 'position' | 'right' | 'top' | 'width'
+>;
+
+type NavigationFocus = {
+  context: 'desktop' | 'mobile' | 'opener';
+  key?: string;
+};
 
 export const Nav = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const navRef = useRef<HTMLElement>(null);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  const desktopNavRef = useRef<HTMLElement>(null);
+  const mobileSurfaceRef = useRef<HTMLDivElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const navigationId = 'primary-navigation';
+  const isOpenRef = useRef(false);
+  const lastNavigationFocusRef = useRef<NavigationFocus | null>(null);
+  const pointerStartedOnBackdropRef = useRef(false);
+  const backdropPointerIdRef = useRef<number | null>(null);
+  const pointerEndedOnBackdropRef = useRef(false);
+  const pendingFocusRef = useRef<HTMLElement | null>(null);
+  const backgroundInertRef = useRef<Map<HTMLElement, boolean> | null>(null);
+  const bodyStylesRef = useRef<BodyStyles | null>(null);
+  const scrollPositionRef = useRef({ x: 0, y: 0 });
 
-  const closeMenu = useCallback((restoreFocus = true) => {
-    setIsOpen(false);
+  const desktopNavigationId = 'desktop-primary-navigation';
+  const mobileDialogId = 'mobile-navigation-dialog';
+  const mobileNavigationId = 'mobile-primary-navigation';
 
-    if (restoreFocus) {
-      requestAnimationFrame(() => openButtonRef.current?.focus());
-    }
+  const setMobileSurfaceRef = useCallback((surface: HTMLDivElement | null) => {
+    mobileSurfaceRef.current = surface;
+    if (!surface) return;
+
+    surface.inert = true;
+    surface.setAttribute('aria-hidden', 'true');
+    surface.removeAttribute('aria-modal');
   }, []);
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 900px)');
-    setIsMobile(mediaQuery.matches);
+  const setBackgroundInert = useCallback((inert: boolean) => {
+    if (inert) {
+      if (backgroundInertRef.current) return;
 
-    const handleBreakpointChange = (event: MediaQueryListEvent) => {
-      const navHasFocus = navRef.current?.contains(document.activeElement);
-      setIsMobile(event.matches);
+      const elements = [
+        document.querySelector<HTMLElement>('header'),
+        document.querySelector<HTMLElement>('.page-container'),
+      ].filter((element): element is HTMLElement => Boolean(element));
 
-      if (!event.matches && isOpen) {
-        setIsOpen(false);
-        requestAnimationFrame(() => {
-          navRef.current?.querySelector<HTMLAnchorElement>('a')?.focus();
-        });
-      } else if (event.matches && !isOpen && navHasFocus) {
-        openButtonRef.current?.focus();
-      }
-    };
-
-    mediaQuery.addEventListener('change', handleBreakpointChange);
-
-    return () => {
-      mediaQuery.removeEventListener('change', handleBreakpointChange);
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) {
+      backgroundInertRef.current = new Map(
+        elements.map((element) => [element, element.inert])
+      );
+      elements.forEach((element) => {
+        element.inert = true;
+      });
       return;
     }
 
+    backgroundInertRef.current?.forEach((wasInert, element) => {
+      element.inert = wasInert;
+    });
+    backgroundInertRef.current = null;
+  }, []);
+
+  const setScrollLocked = useCallback((locked: boolean) => {
     const body = document.body;
-    const page = document.querySelector<HTMLElement>('.page-container');
-    const previousOverflow = body.style.overflow;
-    const previousHeight = body.style.height;
-    const pageWasInert = page?.inert ?? false;
 
-    body.style.overflow = 'hidden';
-    body.style.height = '100vh';
+    if (locked) {
+      if (bodyStylesRef.current) return;
 
-    if (page) {
-      page.inert = true;
+      scrollPositionRef.current = { x: window.scrollX, y: window.scrollY };
+      bodyStylesRef.current = {
+        left: body.style.left,
+        overflow: body.style.overflow,
+        position: body.style.position,
+        right: body.style.right,
+        top: body.style.top,
+        width: body.style.width,
+      };
+
+      body.style.position = 'fixed';
+      body.style.top = `${-scrollPositionRef.current.y}px`;
+      body.style.left = `${-scrollPositionRef.current.x}px`;
+      body.style.right = '0';
+      body.style.width = '100%';
+      body.style.overflow = 'hidden';
+      return;
     }
 
-    const getFocusableElements = () => {
-      const navLinks = Array.from(
-        navRef.current?.querySelectorAll<HTMLElement>('a[href]') ?? []
-      );
-      const emailLink = document.querySelector<HTMLElement>(
-        `.${styles.backdropEmail} a[href]`
-      );
+    if (!bodyStylesRef.current) return;
 
-      return [closeButtonRef.current, ...navLinks, emailLink].filter(
-        (element): element is HTMLElement => Boolean(element)
-      );
+    Object.assign(body.style, bodyStylesRef.current);
+    bodyStylesRef.current = null;
+    window.scrollTo(scrollPositionRef.current.x, scrollPositionRef.current.y);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    if (isOpenRef.current) return;
+
+    isOpenRef.current = true;
+    setIsOpen(true);
+  }, []);
+
+  const closeMenu = useCallback((focusTarget?: HTMLElement | null) => {
+    if (!isOpenRef.current) return;
+
+    pendingFocusRef.current =
+      focusTarget === undefined ? openButtonRef.current : focusTarget;
+    isOpenRef.current = false;
+    setIsOpen(false);
+  }, []);
+
+  useBrowserLayoutEffect(() => {
+    setPortalTarget(document.body);
+
+    const mediaQuery = window.matchMedia(MOBILE_QUERY);
+    setIsMobile(mediaQuery.matches);
+
+    const handleBreakpointChange = (event: MediaQueryListEvent) => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      const focusFellBackToBody =
+        !activeElement || activeElement === document.body;
+      const lastNavigationFocus = focusFellBackToBody
+        ? lastNavigationFocusRef.current
+        : null;
+
+      if (!event.matches) {
+        const mobileLinkKey =
+          activeElement
+            ?.closest<HTMLElement>('[data-navigation-key]')
+            ?.dataset.navigationKey ??
+          (lastNavigationFocus?.context === 'mobile'
+            ? lastNavigationFocus.key
+            : undefined);
+        const focusWasInMobileSurface = Boolean(
+          activeElement && mobileSurfaceRef.current?.contains(activeElement)
+        ) || lastNavigationFocus?.context === 'mobile';
+        const openerHadFocus =
+          activeElement === openButtonRef.current ||
+          lastNavigationFocus?.context === 'opener';
+
+        if (focusWasInMobileSurface || openerHadFocus) {
+          pendingFocusRef.current =
+            (mobileLinkKey
+              ? desktopNavRef.current?.querySelector<HTMLElement>(
+                  `[data-navigation-key='${mobileLinkKey}']`
+                )
+              : null) ??
+            desktopNavRef.current?.querySelector<HTMLElement>('a[href]') ??
+            null;
+        }
+
+        isOpenRef.current = false;
+        setIsOpen(false);
+      } else if (
+        (activeElement && desktopNavRef.current?.contains(activeElement)) ||
+        lastNavigationFocus?.context === 'desktop'
+      ) {
+        pendingFocusRef.current = openButtonRef.current;
+      }
+
+      setIsMobile(event.matches);
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeMenu();
-        return;
-      }
+    mediaQuery.addEventListener('change', handleBreakpointChange);
+    return () => mediaQuery.removeEventListener('change', handleBreakpointChange);
+  }, []);
 
-      if (event.key !== 'Tab') {
-        return;
-      }
+  useBrowserLayoutEffect(() => {
+    const surface = mobileSurfaceRef.current;
+    if (!surface) return;
 
-      const focusableElements = getFocusableElements();
-      const currentIndex = focusableElements.indexOf(
-        document.activeElement as HTMLElement
-      );
+    if (isMobile && isOpen) {
+      surface.inert = false;
+      surface.removeAttribute('aria-hidden');
+      surface.setAttribute('aria-modal', 'true');
+      setScrollLocked(true);
+      setBackgroundInert(true);
+      closeButtonRef.current?.focus({ preventScroll: true });
 
-      if (focusableElements.length === 0) {
-        return;
-      }
+      const getFocusableElements = () =>
+        Array.from(
+          surface.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+          )
+        );
 
-      const nextIndex =
-        currentIndex === -1
-          ? event.shiftKey
-            ? focusableElements.length - 1
-            : 0
-          : event.shiftKey
-          ? (currentIndex - 1 + focusableElements.length) %
-            focusableElements.length
-          : (currentIndex + 1) % focusableElements.length;
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeMenu();
+          return;
+        }
 
-      event.preventDefault();
-      focusableElements[nextIndex]?.focus();
-    };
+        if (event.key !== 'Tab') return;
 
-    document.addEventListener('keydown', handleKeyDown);
-    closeButtonRef.current?.focus();
+        const focusableElements = getFocusableElements();
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
 
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      body.style.overflow = previousOverflow;
-      body.style.height = previousHeight;
+        if (!firstElement || !lastElement) {
+          event.preventDefault();
+          return;
+        }
 
-      if (page) {
-        page.inert = pageWasInert;
-      }
-    };
-  }, [closeMenu, isOpen]);
+        if (event.shiftKey && document.activeElement === firstElement) {
+          event.preventDefault();
+          lastElement.focus();
+        } else if (!event.shiftKey && document.activeElement === lastElement) {
+          event.preventDefault();
+          firstElement.focus();
+        }
+      };
+
+      const handleFocusIn = (event: FocusEvent) => {
+        if (!surface.contains(event.target as Node)) {
+          closeButtonRef.current?.focus({ preventScroll: true });
+        }
+      };
+
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('focusin', handleFocusIn);
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        document.removeEventListener('focusin', handleFocusIn);
+      };
+    }
+
+    setBackgroundInert(false);
+    setScrollLocked(false);
+    pendingFocusRef.current?.focus({ preventScroll: true });
+    pendingFocusRef.current = null;
+    surface.inert = true;
+    surface.setAttribute('aria-hidden', 'true');
+    surface.removeAttribute('aria-modal');
+  }, [closeMenu, isMobile, isOpen, setBackgroundInert, setScrollLocked]);
+
+  useBrowserLayoutEffect(
+    () => () => {
+      setBackgroundInert(false);
+      setScrollLocked(false);
+    },
+    [setBackgroundInert, setScrollLocked]
+  );
+
+  const mobileSurface = (
+    <div
+      aria-label='Site navigation'
+      className={classNames(styles.mobileSurface, recursive.className)}
+      data-open={isMobile && isOpen}
+      id={mobileDialogId}
+      onClick={(event) => {
+        if (
+          pointerStartedOnBackdropRef.current &&
+          pointerEndedOnBackdropRef.current &&
+          event.target === event.currentTarget
+        ) {
+          closeMenu();
+        }
+        pointerStartedOnBackdropRef.current = false;
+        pointerEndedOnBackdropRef.current = false;
+        backdropPointerIdRef.current = null;
+      }}
+      onPointerDown={(event) => {
+        const startedOnBackdrop = event.target === event.currentTarget;
+        pointerStartedOnBackdropRef.current = startedOnBackdrop;
+        pointerEndedOnBackdropRef.current = false;
+        backdropPointerIdRef.current = startedOnBackdrop
+          ? event.pointerId
+          : null;
+      }}
+      onPointerUp={(event) => {
+        pointerEndedOnBackdropRef.current =
+          backdropPointerIdRef.current === event.pointerId &&
+          event.target === event.currentTarget;
+      }}
+      onPointerCancel={() => {
+        pointerStartedOnBackdropRef.current = false;
+        pointerEndedOnBackdropRef.current = false;
+        backdropPointerIdRef.current = null;
+      }}
+      ref={setMobileSurfaceRef}
+      role='dialog'
+    >
+      <div className={styles.mobileSurfaceHeader}>
+        <div className={styles.mobileSurfaceName}>Max David</div>
+        <MobileMenuButton
+          aria-label='Close navigation'
+          icon='close'
+          onClick={() => closeMenu()}
+          onFocus={() => {
+            lastNavigationFocusRef.current = { context: 'mobile' };
+          }}
+          ref={closeButtonRef}
+          type='button'
+        />
+      </div>
+      <div className={styles.mobilePanel}>
+        <nav aria-label='Primary navigation' id={mobileNavigationId}>
+          <ul>
+            {navigationLinks.map((link) => (
+              <li className={styles.link} key={link.key}>
+                <Link
+                  data-navigation-key={link.key}
+                  href={link.href}
+                  onClick={() => closeMenu(null)}
+                  onFocus={() => {
+                    lastNavigationFocusRef.current = {
+                      context: 'mobile',
+                      key: link.key,
+                    };
+                  }}
+                  target={'target' in link ? link.target : undefined}
+                >
+                  {link.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
+      <div className={styles.mobileSurfaceEmail}>
+        <Link
+          href='mailto:me@maxdavid.com'
+          onClick={() => closeMenu(null)}
+          onFocus={() => {
+            lastNavigationFocusRef.current = { context: 'mobile' };
+          }}
+        >
+          me@maxdavid.com
+        </Link>
+      </div>
+    </div>
+  );
 
   return (
-    <div
-      aria-label={isOpen ? 'Site navigation' : undefined}
-      aria-modal={isOpen ? true : undefined}
-      className={styles.navContainer}
-      role={isOpen ? 'dialog' : undefined}
-    >
-      <div
-        className={classNames(styles.backdrop, recursive.className)}
-        hidden={!isOpen}
-        onClick={() => closeMenu()}
-      >
-        <div className={styles.backdropInner}>
-          <div className={styles.backdropName} onClick={() => closeMenu()}>
-            Max David
-          </div>
-          <div className={styles.backdropEmail}>
-            <Link href='mailto:me@maxdavid.com'>me@maxdavid.com</Link>
-          </div>
-          <MobileMenuClose
-            aria-label='Close navigation'
-            onClick={() => closeMenu()}
-            disabled={!isOpen}
-            ref={closeButtonRef}
-          />
-        </div>
-      </div>
+    <div className={styles.navContainer}>
       <nav
         aria-label='Primary navigation'
-        aria-hidden={isMobile && !isOpen}
-        className={classNames(styles.nav, isOpen && styles.mobileOpen)}
-        id={navigationId}
-        ref={navRef}
-        {...(isMobile && !isOpen ? { inert: '' } : {})}
+        className={styles.desktopNav}
+        id={desktopNavigationId}
+        ref={desktopNavRef}
       >
-        <div className={styles.navInner}>
-          <ul>
-            <li className={styles.link}>
-              <Link href='https://linkedin.com/in/maxdavid' target='linkedin'>
-                linkedin
+        <ul>
+          {navigationLinks.map((link) => (
+            <li className={styles.link} key={link.key}>
+              <Link
+                data-navigation-key={link.key}
+                href={link.href}
+                onFocus={() => {
+                  lastNavigationFocusRef.current = {
+                    context: 'desktop',
+                    key: link.key,
+                  };
+                }}
+                target={'target' in link ? link.target : undefined}
+              >
+                {link.label}
               </Link>
             </li>
-            <li className={classNames(styles.link)}>
-              <Link href='/MaxDavid_resume.pdf'>resume</Link>
-            </li>
-          </ul>
-        </div>
+          ))}
+        </ul>
       </nav>
-      <MobileMenuOpen
-        aria-controls={navigationId}
-        aria-expanded={isOpen}
+      <MobileMenuButton
+        aria-controls={mobileDialogId}
+        aria-expanded={isMobile && isOpen}
         aria-label='Open navigation'
-        disabled={isOpen}
-        onClick={() => setIsOpen(true)}
+        icon='open'
+        onClick={openMenu}
+        onFocus={() => {
+          lastNavigationFocusRef.current = { context: 'opener' };
+        }}
         ref={openButtonRef}
+        type='button'
       />
+      {portalTarget && createPortal(mobileSurface, portalTarget)}
     </div>
   );
 };
