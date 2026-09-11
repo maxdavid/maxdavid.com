@@ -32,6 +32,11 @@
   font-variation-settings: 'CASL' 1, 'slnt' -15, 'wght' 1000;
 }
 
+.navContainer {
+  display: flex;
+  align-items: center;
+}
+
 .nav {
   z-index: 420069;
 
@@ -51,11 +56,13 @@
   @media (max-width: 900px) {
     position: absolute;
 
-    width: calc(100vw - 32px);
+    width: auto;
     height: calc(100vh - 208px);
+    height: calc(100dvh - 208px);
     background-color: var(--theme-background);
     border-radius: 6px;
     top: 104px;
+    left: 16px;
     right: 16px;
     border: 1px solid #eeeef8;
 
@@ -63,16 +70,23 @@
 
     pointer-events: none;
     opacity: 0;
+    visibility: hidden;
 
     will-change: transform, opacity;
     transition-duration: 250ms;
-    transition-property: transform, opacity;
-    transform-origin: 50%, 0%;
+    transition-property: transform, opacity, visibility;
+    transition-delay: 0ms, 0ms, 250ms;
+    transform-origin: 50% 0%;
     transform: rotateX(-20deg);
     transform-style: preserve-3d;
 
+    @media (prefers-reduced-motion: reduce) {
+      transition-delay: 0ms;
+    }
+
     ul {
-      height: 100%;
+      min-height: 100%;
+      height: auto;
       flex-direction: column;
       justify-content: center;
     }
@@ -81,23 +95,26 @@
       position: relative;
       height: 100%;
       width: 100%;
-      padding: 80px 32px;
+      padding: clamp(16px, 10vh, 80px) 32px;
+      overflow-y: auto;
     }
   }
 }
 
 .mobileOpen {
-  pointer-events: all;
+  pointer-events: auto;
   opacity: 1;
+  visibility: visible;
+  transition-delay: 0ms;
   transform: rotateX(0deg);
 }
 
 .mobileMenuButton {
   border: none;
   height: 100%;
-  min-height: 32px;
+  min-height: 44px;
   min-width: 64px;
-  pointer-events: visible;
+  pointer-events: auto;
   opacity: 0;
   visibility: hidden;
   display: none;
@@ -111,6 +128,11 @@
   &:disabled {
     opacity: 0;
     visibility: hidden;
+  }
+
+  &:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 4px;
   }
 
   &Close {
@@ -138,13 +160,13 @@
   z-index: 42069;
 
   opacity: 1;
-  pointer-events: painted;
+  pointer-events: auto;
 
   color: var(--theme-background);
   font-size: clamp(2rem, 5vw, 3rem);
   font-variation-settings: 'CASL' 1, 'slnt' -15, 'wght' 1000;
 
-  &:hidden {
+  &[hidden] {
     opacity: 0;
     pointer-events: none;
   }
